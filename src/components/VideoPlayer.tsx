@@ -200,6 +200,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onProgress={handleProgress}
           width="100%"
           height="100%"
+          className="react-player"
           style={{ pointerEvents: hideControls ? "none" : "auto" }}
         />
       </Box>
