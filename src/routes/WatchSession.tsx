@@ -1,25 +1,95 @@
 import { useEffect, useState } from "react";
 import VideoPlayer from "../components/VideoPlayer";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Button, TextField, Tooltip } from "@mui/material";
+import { Box, Button, TextField, Tooltip, CircularProgress } from "@mui/material";
 import LinkIcon from "@mui/icons-material/Link";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
+import { wsClient, PlayheadState } from "../utils/websocket";
 
 const WatchSession: React.FC = () => {
-  const { sessionId } = useParams();
+  const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const [url, setUrl] = useState<string | null>(null);
-
   const [linkCopied, setLinkCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [playheadState, setPlayheadState] = useState<PlayheadState | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // load video by session ID -- right now we just hardcode a constant video but you should be able to load the video associated with the session
-    setUrl("https://www.youtube.com/watch?v=NX1eKLReSpY");
+    if (!sessionId) {
+      navigate('/create');
+      return;
+    }
 
-    // if session ID doesn't exist, you'll probably want to redirect back to the home / create session page
-  }, [sessionId]);
+    const connectToSession = async () => {
+      try {
+        setLoading(true);
 
-  if (!!url) {
+        // Join the session
+        await wsClient.joinSession(sessionId);
+
+        // Listen for session snapshot (initial state)
+        wsClient.on('SESSION_SNAPSHOT', (message) => {
+          if (message.sessionId === sessionId) {
+            setUrl(message.url);
+            setPlayheadState(message.state);
+            setLoading(false);
+          }
+        });
+
+        // Listen for state broadcasts (updates)
+        wsClient.on('STATE_BROADCAST', (message) => {
+          if (message.sessionId === sessionId) {
+            setPlayheadState(message.state);
+            if (message.state.url && message.state.url !== url) {
+              setUrl(message.state.url);
+            }
+          }
+        });
+
+      } catch (error) {
+        console.error("Failed to join session:", error);
+        setError("Failed to join session. Please try again.");
+        setLoading(false);
+      }
+    };
+
+    connectToSession();
+
+    // Cleanup function
+    return () => {
+      // We could disconnect here, but we'll keep the connection open
+      // in case the user navigates back to this page
+    };
+  }, [sessionId, navigate, url]);
+
+  // Function to update the playhead state
+  const updatePlayheadState = (pos: number, playing: boolean) => {
+    if (sessionId && url) {
+      wsClient.updateState(sessionId, pos, playing, url);
+    }
+  };
+
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100%">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100%" flexDirection="column" gap={2}>
+        <div>{error}</div>
+        <Button variant="contained" onClick={() => navigate('/create')}>
+          Create New Session
+        </Button>
+      </Box>
+    );
+  }
+
+  if (!!url && playheadState) {
     return (
       <>
         <Box
@@ -66,7 +136,11 @@ const WatchSession: React.FC = () => {
             </Button>
           </Tooltip>
         </Box>
-        <VideoPlayer url={url} />;
+        <VideoPlayer
+          url={url}
+          initialState={playheadState}
+          onStateChange={updatePlayheadState}
+        />
       </>
     );
   }
