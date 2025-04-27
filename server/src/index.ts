@@ -87,6 +87,44 @@ const getConnectionId = () => {
 // Store connection IDs for each WebSocket
 const connectionIds = new WeakMap<WebSocket, string>();
 
+// Map to store pending broadcasts for coalescing
+const pending = new Map<string, Message>();
+
+// Track coalescing statistics
+const coalesceStats = {
+  scheduled: 0,
+  coalesced: 0,
+  executed: 0,
+  getCoalescingRatio: function() {
+    return this.scheduled > 0 ? (this.coalesced / this.scheduled * 100).toFixed(2) + '%' : '0%';
+  }
+};
+
+// Schedule a broadcast with coalescing
+function scheduleBroadcast(sessionId: string, msg: Message) {
+  coalesceStats.scheduled++;
+  logger.debug(`Scheduling broadcast for session ${sessionId}, message type ${msg.type}`);
+
+  if (!pending.has(sessionId)) {
+    // If no pending broadcast for this session, schedule one
+    pending.set(sessionId, msg);
+    setTimeout(() => {
+      const pendingMsg = pending.get(sessionId)!;
+      coalesceStats.executed++;
+      logger.debug(`Executing coalesced broadcast for session ${sessionId}, message type ${pendingMsg.type}`);
+      logger.debug(`Coalescing stats: ${coalesceStats.scheduled} scheduled, ${coalesceStats.coalesced} coalesced (${coalesceStats.getCoalescingRatio()} ratio)`);
+      broadcast(sessionId, pendingMsg);
+      pending.delete(sessionId);
+    }, 20); // 1 tick ≈60 fps (about 16.7ms)
+  } else {
+    // If there's already a pending broadcast, just update the message
+    coalesceStats.coalesced++;
+    logger.debug(`Coalescing broadcast for session ${sessionId}, replacing with newer message`);
+    pending.set(sessionId, msg); // overwrite with newest
+  }
+}
+
+// Actual broadcast function that sends messages to clients
 function broadcast(sessionId: string, message: Message) {
   const clients = sessions.get(sessionId);
   if (!clients) {
@@ -122,7 +160,13 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     sessions: sessions.size,
     timestamp: new Date().toISOString(),
-    logLevel: LOG_LEVEL
+    logLevel: LOG_LEVEL,
+    coalescing: {
+      scheduled: coalesceStats.scheduled,
+      coalesced: coalesceStats.coalesced,
+      executed: coalesceStats.executed,
+      ratio: coalesceStats.getCoalescingRatio()
+    }
   });
 });
 
@@ -244,7 +288,11 @@ wss.on('connection', (ws, req) => {
           logger.info(`State updated for session ${sessionId}, pos: ${next.pos}, playing: ${next.playing}`);
           latestState.set(sessionId, next);
 
-          broadcast(sessionId, {
+          // Use scheduleBroadcast instead of broadcast to coalesce rapid updates
+          // This helps reduce the number of messages sent to clients by combining
+          // multiple updates that occur within a short time window (20ms)
+          // For example, if a client sends 10 updates in 15ms, only the last one will be broadcast
+          scheduleBroadcast(sessionId, {
             type: 'STATE_BROADCAST',
             sessionId,
             state: next
