@@ -13,19 +13,50 @@ import {
   CrdtUpdateMessage
 } from './types';
 
-// Logger utility for consistent formatting
+// Configure logging level
+// Check for command line arguments like --log=debug
+const logArgMatch = process.argv.find(arg => arg.startsWith('--log='))?.match(/--log=(\w+)/);
+const logArgValue = logArgMatch ? logArgMatch[1] : null;
+
+// Priority: command line arg > environment variable > default
+let rawLogLevel = logArgValue || process.env.LOG_LEVEL || 'info';
+
+// Validate log level
+const validLogLevels = ['error', 'warn', 'info', 'debug'];
+if (!validLogLevels.includes(rawLogLevel)) {
+  console.warn(`Invalid log level: ${rawLogLevel}. Using 'info' instead.`);
+  rawLogLevel = 'info';
+}
+
+const LOG_LEVEL = rawLogLevel as 'error' | 'warn' | 'info' | 'debug';
+
+// Function to determine if a message at the given level should be logged
+function shouldLog(level: 'debug'|'info'|'warn'|'error'): boolean {
+  const order = { debug: 0, info: 1, warn: 2, error: 3 };
+  return order[level] >= order[LOG_LEVEL as keyof typeof order];
+}
+
+// Logger utility with level-based filtering
 const logger = {
   info: (message: string, ...args: any[]) => {
-    console.log(`[INFO] ${new Date().toISOString()} - ${message}`, ...args);
+    if (shouldLog('info')) {
+      console.log(`[INFO] ${new Date().toISOString()} - ${message}`, ...args);
+    }
   },
   error: (message: string, ...args: any[]) => {
-    console.error(`[ERROR] ${new Date().toISOString()} - ${message}`, ...args);
+    if (shouldLog('error')) {
+      console.error(`[ERROR] ${new Date().toISOString()} - ${message}`, ...args);
+    }
   },
   warn: (message: string, ...args: any[]) => {
-    console.warn(`[WARN] ${new Date().toISOString()} - ${message}`, ...args);
+    if (shouldLog('warn')) {
+      console.warn(`[WARN] ${new Date().toISOString()} - ${message}`, ...args);
+    }
   },
   debug: (message: string, ...args: any[]) => {
-    console.debug(`[DEBUG] ${new Date().toISOString()} - ${message}`, ...args);
+    if (shouldLog('debug')) {
+      console.debug(`[DEBUG] ${new Date().toISOString()} - ${message}`, ...args);
+    }
   }
 };
 
@@ -64,13 +95,12 @@ function broadcast(sessionId: string, message: Message) {
   }
 
   logger.info(`Broadcasting message type ${message.type} to session ${sessionId} (${clients.size} clients)`);
-
+  const messageStr = JSON.stringify(message);
   let sentCount = 0;
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) {
       const connId = connectionIds.get(ws) || 'unknown';
       try {
-        const messageStr = JSON.stringify(message);
         ws.send(messageStr);
         logger.debug(`Sent ${message.type} to client ${connId} (${messageStr.length} bytes)`);
         sentCount++;
@@ -87,18 +117,19 @@ const app = express();
 app.use(cors());
 
 // Add a simple health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
     sessions: sessions.size,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    logLevel: LOG_LEVEL
   });
 });
 
 export const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-logger.info('WebSocket server created');
+logger.info(`WebSocket server created (LOG_LEVEL: ${LOG_LEVEL})`);
 
 wss.on('connection', (ws, req) => {
   const connId = getConnectionId();
@@ -256,6 +287,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// TODO(adit): persistence
 // const SAVE_PATH = path.join(process.cwd(), 'sessions.json');
 // const persist = setInterval(() => {
 //   fs.writeFileSync(SAVE_PATH, JSON.stringify(Object.fromEntries(latestState)), 'utf8');
@@ -282,6 +314,8 @@ if (require.main === module) {
     logger.info(`Server process ID: ${process.pid}`);
     logger.info(`Node.js version: ${process.version}`);
     logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`Log level: ${LOG_LEVEL} (change with --log=debug or LOG_LEVEL=debug environment variable)`);
+    logger.debug('Debug logging is enabled');
     logger.info('Ready to accept connections');
   });
 
