@@ -37,13 +37,12 @@ const WatchSession: React.FC = () => {
             // Store the server timestamp when we received this message
             const receivedTime = Date.now();
 
-            // Calculate network delay (roughly half the round-trip time)
-            // In a real app, you'd use a more sophisticated approach
-            const estimatedNetworkDelay = 50; // milliseconds
+            // Get the current time to calculate time elapsed since the state was created
 
-            // Adjust the position based on whether the video is playing
+            // Create a copy of the state to avoid modifying the original
             const adjustedState = { ...message.state };
 
+            // Only adjust the position if the video is playing
             if (adjustedState.playing) {
               // If video is playing, adjust the position based on the time elapsed since the state was created
               // Formula: adjusted_pos = original_pos + (current_time - state_timestamp) / 1000
@@ -53,6 +52,8 @@ const WatchSession: React.FC = () => {
               console.log(`Adjusting position by ${adjustmentSeconds}s due to network delay`);
               adjustedState.pos += adjustmentSeconds;
             }
+
+            console.log(`Initial state: position=${adjustedState.pos}, playing=${adjustedState.playing}`);
 
             setUrl(message.url);
             setPlayheadState(adjustedState);
@@ -68,10 +69,19 @@ const WatchSession: React.FC = () => {
             // Store the server timestamp when we received this message
             const receivedTime = Date.now();
 
-            // Adjust the position based on whether the video is playing
+            // Create a copy of the state to avoid modifying the original
             const adjustedState = { ...message.state };
 
-            if (adjustedState.playing) {
+            // Check if this is a seek event (position changed significantly)
+            const isSeekEvent = playheadState &&
+              Math.abs(adjustedState.pos - playheadState.pos) > 1.0;
+
+            if (isSeekEvent) {
+              console.log(`Detected seek event: ${playheadState?.pos} -> ${adjustedState.pos}`);
+            }
+
+            // Only adjust the position for playing videos that aren't seek events
+            if (adjustedState.playing && !isSeekEvent) {
               // If video is playing, adjust the position based on the time elapsed since the state was created
               // Formula: adjusted_pos = original_pos + (current_time - state_timestamp) / 1000
               const timeElapsedMs = receivedTime - adjustedState.ts.p;

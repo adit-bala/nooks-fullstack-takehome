@@ -46,9 +46,13 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       // Get current time and calculate the adjusted target position
       const currentTime = player.current.getCurrentTime();
+
+      // Always use the position from the server, with adjustment if playing
       const targetPosition = initialState.playing
         ? initialState.pos + networkDelayAdjustment
         : initialState.pos;
+
+      console.log(`Current time: ${currentTime}, Target position: ${targetPosition}, Playing: ${initialState.playing}`);
 
       // Check if we need to seek
       const needsSeek = Math.abs(currentTime - targetPosition) > seekThreshold;
@@ -175,7 +179,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const duration = player.current.getDuration();
     const seekTime = duration * relativeX;
 
-    console.log("Manual seek to:", seekTime);
+    console.log("Manual seek to:", seekTime, "Playing state:", playing);
 
     // Mark this as a local change
     isLocalChange.current = true;
@@ -185,8 +189,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     player.current.seekTo(seekTime, 'seconds');
 
     // Send update to server
+    // IMPORTANT: Always send a state update when seeking, regardless of playing state
     if (onStateChange) {
+      // We always want to send the seek event to the server
+      // This ensures that seeking works when the video is paused
       onStateChange(seekTime, playing);
+      console.log("Sent seek update to server with position:", seekTime, "playing:", playing);
     }
 
     // Reset the local change flag after a short delay
