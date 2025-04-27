@@ -95,13 +95,41 @@ I could use existing mechanisms when using this state, so didn't consider anythi
 
 4. **How do you guarantee that the time that a new user joins is accurate (i.e perfectly in sync with the other users in the session) and are there any edge cases where it isn’t? Think about cases that might occur with real production traffic.**
 
+When a new user joins, they receive the latest state from the server, which includes the current position and playing status. I adjust for network delay by adding the elapsed time since the state was created.
 
+Some problems that could occur in production include 
+
+- Variable network latency can cause inconsistencies, especially with global users
+- Client clock differences can throw off the time adjustment calculation
+- Video buffering varies across devices and network conditions
+- YouTube's player has quirks with seeking and autoplay policies
 
 5. **Are there any other situations - i.e race conditions, edge cases - where one user can be out of sync with another? (Out of sync meaning that user A has the video playing or paused at some time, while user B has the video playing or paused at some other time.)**
 
+Yes, several situations can cause desynchronization:
+
+Network partitions: If a user temporarily loses connection, they'll miss updates and drift out of sync until they reconnect
+
+Rapid state changes: If multiple users make changes in quick succession, the CRDT merge might not resolve as expected due to clock skew
+
+Browser throttling: Background tabs get throttled, causing timing issues if a user switches tabs
+
+CDN variability: Different users might fetch video content from different CDN edges with varying latencies
+
+Ad insertions: YouTube sometimes inserts ads differently for different users
+
+Seek race conditions: If two users seek simultaneously, one update might overwrite the other
+I mitigated some of these with coalescing and debouncing, but they can still occur. The CRDT approach helps with concurrent updates, but doesn't solve all timing issues.
+
+For critical synchronization, I'd probably need to implement a more authoritative server model or periodic forced resynchronization, but that would sacrifice some of the responsiveness of the current approach.
+
 6. **How would you productionize this application to a scale where it needs to be used reliably with 1M+ DAUs and 10k people connected to a single session? Think infrastructure changes, code changes & UX changes.**
 
+The current websocket approach might not work, we could use a distributed WebSocket architecture with Redis or Kafka for pub/sub. We could have regional servers, and auto-scaling with k8s based on session load. We should also implement rate limiting and DDoS protection.
 
+For code changes, we should optimize the broadcast mechanism, implement a hierarchical fan-out pattern for large sessions, add selective broadcasting to only send updates to affected users, improve error handling and retry logic, implement proper authentication and authorization, and add comprehensive telemetry for debugging.
+
+For UX changes, we should add a "sync status" indicator showing connection quality, implement different roles (host, moderator, viewer) with different permissions, addd avatars for who's watching, add chat features with moderation tools,  and add fallback mechanisms when synchronization isn't possible.
 
 🚨 **Please fill out this section in the README with answers to these questions, or send the answers in your email instead.**
 
