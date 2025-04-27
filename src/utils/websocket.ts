@@ -1,198 +1,107 @@
-import { v4 as uuidv4 } from "uuid";
+import { EventEmitter } from 'events';
 
-// Types matching the server's types
-export interface HLC {
-  p: number;    // physical time in ms
-  l: number;    // logical counter
-  c: string;    // client / session id
-}
-
-export interface PlayheadState {
-  ts: HLC;
-  pos: number;      // seconds
-  playing: boolean;
-  url?: string;     // YouTube URL
-}
-
-export interface JoinSessionMessage {
-  type: 'JOIN_SESSION';
-  sessionId: string;
-}
-
-export interface CreateSessionMessage {
-  type: 'CREATE_SESSION';
-  sessionId: string;
-  url: string;
-}
-
-export interface CrdtUpdateMessage {
-  type: 'CRDT_UPDATE';
-  sessionId: string;
-  state: PlayheadState;
-}
-
-export interface SessionSnapshotMessage {
-  type: 'SESSION_SNAPSHOT';
-  sessionId: string;
-  state: PlayheadState;
-  url: string;
-}
-
-export interface StateBroadcastMessage {
-  type: 'STATE_BROADCAST';
-  sessionId: string;
-  state: PlayheadState;
-}
-
-export interface SessionCreatedMessage {
-  type: 'SESSION_CREATED';
-  sessionId: string;
-  state: PlayheadState;
-}
+export interface HLC { p:number; l:number; c:string; }
+export interface PlayheadState { ts:HLC; pos:number; playing:boolean; url?:string; }
 
 export type Message =
-  | JoinSessionMessage
-  | CreateSessionMessage
-  | CrdtUpdateMessage
-  | SessionSnapshotMessage
-  | StateBroadcastMessage
-  | SessionCreatedMessage;
+  | { type:'JOIN_SESSION';    sessionId:string }
+  | { type:'CREATE_SESSION';  sessionId:string; url:string }
+  | { type:'CRDT_UPDATE';     sessionId:string; state:PlayheadState }
+  | { type:'SESSION_SNAPSHOT';sessionId:string; state:PlayheadState; url:string }
+  | { type:'STATE_BROADCAST'; sessionId:string; state:PlayheadState }
+  | { type:'SESSION_CREATED'; sessionId:string; state:PlayheadState };
 
-// WebSocket client class
-export class WebSocketClient {
+class TypedEmitter extends EventEmitter {
+  override on<T extends Message['type']>(
+    type: T,
+    listener: (msg: Extract<Message,{type:T}>) => void
+  ) { return super.on(type, listener); }
+  emitTyped(msg: Message) { this.emit(msg.type, msg); }
+}
+
+class WSClient {
   private ws: WebSocket | null = null;
-  private clientId: string;
-  private messageHandlers: Map<string, ((message: any) => void)[]> = new Map();
-  private connectionPromise: Promise<WebSocket> | null = null;
-  private logicalClock = 0;
+  private state: 'idle'|'connecting'|'ready'|'closed' = 'idle';
+  private queue: string[] = [];
+  private emitter = new TypedEmitter();
+  private logical = 0;
+  private clientId = crypto.randomUUID();
 
-  constructor() {
-    this.clientId = uuidv4();
-  }
+  private connect(): void {
+    if (this.state === 'ready' || this.state === 'connecting') return;
 
-  // Connect to the WebSocket server
-  connect(): Promise<WebSocket> {
-    if (this.connectionPromise) {
-      return this.connectionPromise;
-    }
+    this.state = 'connecting';
+    this.ws    = new WebSocket('ws://localhost:3001');
 
-    this.connectionPromise = new Promise((resolve, reject) => {
-      const wsUrl = `ws://localhost:3001`;
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        console.log('WebSocket connected');
-        resolve(this.ws!);
-      };
-
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        reject(error);
-      };
-
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        this.connectionPromise = null;
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data) as Message;
-          this.handleMessage(message);
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-        }
-      };
-    });
-
-    return this.connectionPromise;
-  }
-
-  // Send a message to the server
-  async sendMessage(message: Message): Promise<void> {
-    const ws = await this.connect();
-    ws.send(JSON.stringify(message));
-  }
-
-  // Create a new session
-  async createSession(sessionId: string, url: string): Promise<void> {
-    await this.sendMessage({
-      type: 'CREATE_SESSION',
-      sessionId,
-      url
-    });
-  }
-
-  // Join an existing session
-  async joinSession(sessionId: string): Promise<void> {
-    await this.sendMessage({
-      type: 'JOIN_SESSION',
-      sessionId
-    });
-  }
-
-  // Update the playhead state
-  async updateState(sessionId: string, pos: number, playing: boolean, url?: string): Promise<void> {
-    // Increment logical clock for each update
-    this.logicalClock++;
-
-    // Create timestamp for this update
-    const timestamp = Date.now();
-
-    const state: PlayheadState = {
-      ts: {
-        p: timestamp, // Physical timestamp in milliseconds
-        l: this.logicalClock,
-        c: this.clientId
-      },
-      pos,
-      playing,
-      url
+    this.ws.onopen = () => {
+      this.state = 'ready';
+      this.queue.forEach(frame => this.ws!.send(frame));
+      this.queue.length = 0;
     };
 
-    console.log(`Sending state update: pos=${pos}, playing=${playing}, timestamp=${timestamp}`);
+    this.ws.onmessage = e => {
+      try { this.emitter.emitTyped(JSON.parse(e.data)); }
+      catch (err) { console.error('WS parse', err); }
+    };
 
-    await this.sendMessage({
-      type: 'CRDT_UPDATE',
-      sessionId,
-      state
-    });
+    this.ws.onclose  = () => { this.state = 'closed'; };
+    this.ws.onerror  = err => console.error('WS error', err);
   }
 
-  // Register a handler for a specific message type
-  on<T extends Message['type']>(
-    type: T,
-    handler: (message: Extract<Message, { type: T }>) => void
-  ): void {
-    if (!this.messageHandlers.has(type)) {
-      this.messageHandlers.set(type, []);
+  private send(msg: Message) {
+    const data = JSON.stringify(msg);
+    if (this.state !== 'ready') {
+      this.connect();
+      this.queue.push(data);
+    } else {
+      this.ws!.send(data);
     }
-    this.messageHandlers.get(type)!.push(handler as any);
   }
 
-  // Handle incoming messages
-  private handleMessage(message: Message): void {
-    const { type } = message;
-    const handlers = this.messageHandlers.get(type) || [];
+  on = this.emitter.on.bind(this.emitter);
+  off = this.emitter.off.bind(this.emitter);
 
-    handlers.forEach(handler => {
-      try {
-        handler(message);
-      } catch (error) {
-        console.error(`Error in handler for message type ${type}:`, error);
+  createSession(sessionId: string, url: string): Promise<void> {
+    this.send({ type:'CREATE_SESSION', sessionId, url });
+    return Promise.resolve();
+  }
+
+  joinSession(sessionId: string): Promise<void> {
+    this.send({ type:'JOIN_SESSION', sessionId });
+    return Promise.resolve();
+  }
+
+  private pending: {sessionId:string;state:PlayheadState}|null = null;
+  private flushTimer: number | null = null;
+
+  updateState(sessionId: string, pos: number, playing: boolean, url?: string): Promise<void> {
+    this.logical += 1;
+    const state: PlayheadState = {
+      ts:{ p:Date.now(), l:this.logical, c:this.clientId },
+      pos, playing, url
+    };
+    this.pending = { sessionId, state };
+
+    return new Promise<void>((resolve) => {
+      if (this.flushTimer === null) {
+        this.flushTimer = window.setTimeout(() => {
+          this.send({ type:'CRDT_UPDATE', ...this.pending! });
+          this.pending = null;
+          this.flushTimer = null;
+          resolve();
+        }, 50);
+      } else {
+        resolve(); // Resolve immediately if there's already a pending update
       }
     });
   }
 
-  // Close the WebSocket connection
-  disconnect(): void {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-      this.connectionPromise = null;
-    }
+  disconnect() {
+    this.ws?.close();
+    this.ws   = null;
+    this.state= 'closed';
+    this.queue.length = 0;
   }
 }
 
-// Create a singleton instance
-export const wsClient = new WebSocketClient();
+export const wsClient = new WSClient();

@@ -155,6 +155,7 @@ const app = express();
 app.use(cors());
 
 // Add a simple health check endpoint
+// curl http://localhost:3001/health
 app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
