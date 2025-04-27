@@ -53,15 +53,55 @@ After building the watch party app, we would like you to answer the following qu
 
 1. **How did you approach the problem? What did you choose to learn or work on first? Did any unexpected difficulties come up - if so, how did you resolve them?**
 
+My first thoughts were to avoid locking and some sort of server coordination. Thought it would be simplest to have the server act as a proxy for a peer-to-peer network. From my research at Berkeley, I learned about CRDTs and how they can avoid expensive coordination wherein by using specific data structures we can merge state udpates with minimal overhead on the server. I chose to use the last writer wins semantic since it makes sense that whoever sent in their update most recently should be reflected on the server. Using CRDT's is nice since it also allows users to make changes locally first without permission from the server. I also wanted to succintly represent the server's state, which I did with hybrid logical clock. We can use physical time to denote the "winner" for concurrent updates, and tie-break with logical clock for client updates sent simutaneously and then fall back on client id as a tie-breaker.
+
+I was thinking about also using tRPC, but only have used gRPC, so decided to go with typescript to keep it simple for the backend. I know there are other solutions to resolving concurrent updates, but I wanted to keep it simple and try out the techniques I learned from reading research papers. I know they're used in the real world too (Amazon uses CRDTs for DynamoDB).
+
+Some problems were avoiding excessive server updates. With CRDT semantics it became easy to coalesce updates on the server, but I also added a debouncing mechanism on the client side to avoid sending updates too frequently.
+
+Honestly, not too many problems on the server. I used AI to program the frontend and iterate, so it did most of the hardwork. I contemplated using Cypress to test the frontend, but decided it was overkill for this project.
+
 2. **How did you implement seeking to different times in the video? Are there any other approaches you considered and what are the tradeoffs between them?**
+
+Client sends a full CRDT state update on seek, the server coalesces updates and sends a broadcast. Peers basically do
+```
+currentPos = pos + ( now() − ts ) / 1000
+```
+which is accounting for network transmission time, when we do `now() - ts` and add that to position.
+
+I honestly didn't consider other approaches, since I couldn't think of a better solution than this, and it seemed to be simple and efficient enough for my use cases. I'd probably have to add some logging/tracing to see if there are any issues with this approach.
 
 3. **How do new users know what time to join the watch party? Are there any other approaches you considered and what were the tradeoffs between them?**
 
+New users receive most up to date state from the server. The state is quite succint, so everything fell into place after coming up with the structure of the state. 
+
+```
+/** Hybrid Logical Clock */
+export interface HLC {
+  p: number;    // physical time in ms
+  l: number;    // logical counter
+  c: string;    // client / session id
+}
+/** Video playhead state */
+export interface PlayheadState {
+  ts: HLC;
+  pos: number;      // seconds
+  playing: boolean;
+  url?: string;     // YouTube URL
+}
+```
+
+I could use existing mechanisms when using this state, so didn't consider anything else!
+
 4. **How do you guarantee that the time that a new user joins is accurate (i.e perfectly in sync with the other users in the session) and are there any edge cases where it isn’t? Think about cases that might occur with real production traffic.**
+
+
 
 5. **Are there any other situations - i.e race conditions, edge cases - where one user can be out of sync with another? (Out of sync meaning that user A has the video playing or paused at some time, while user B has the video playing or paused at some other time.)**
 
 6. **How would you productionize this application to a scale where it needs to be used reliably with 1M+ DAUs and 10k people connected to a single session? Think infrastructure changes, code changes & UX changes.**
+
+
 
 🚨 **Please fill out this section in the README with answers to these questions, or send the answers in your email instead.**
 
