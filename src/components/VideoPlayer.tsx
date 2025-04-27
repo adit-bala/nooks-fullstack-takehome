@@ -61,8 +61,7 @@ const VideoPlayer: React.FC<Props> = ({
     setPos(target);
     setPlay(initialState.playing);
 
-    const internal = player.current.getInternalPlayer();
-    initialState.playing ? internal?.playVideo?.() : internal?.pauseVideo?.();
+    if (initialState.playing) player.current.getInternalPlayer()?.playVideo?.();
 
     setTimeout(() => (localChange.current = false), FLAG_DELAY);
   }, [initialState, ready, joined]);
