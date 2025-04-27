@@ -135,10 +135,13 @@ export class WebSocketClient {
   async updateState(sessionId: string, pos: number, playing: boolean, url?: string): Promise<void> {
     // Increment logical clock for each update
     this.logicalClock++;
-    
+
+    // Create timestamp for this update
+    const timestamp = Date.now();
+
     const state: PlayheadState = {
       ts: {
-        p: Date.now(),
+        p: timestamp, // Physical timestamp in milliseconds
         l: this.logicalClock,
         c: this.clientId
       },
@@ -146,6 +149,8 @@ export class WebSocketClient {
       playing,
       url
     };
+
+    console.log(`Sending state update: pos=${pos}, playing=${playing}, timestamp=${timestamp}`);
 
     await this.sendMessage({
       type: 'CRDT_UPDATE',
@@ -156,7 +161,7 @@ export class WebSocketClient {
 
   // Register a handler for a specific message type
   on<T extends Message['type']>(
-    type: T, 
+    type: T,
     handler: (message: Extract<Message, { type: T }>) => void
   ): void {
     if (!this.messageHandlers.has(type)) {
@@ -169,7 +174,7 @@ export class WebSocketClient {
   private handleMessage(message: Message): void {
     const { type } = message;
     const handlers = this.messageHandlers.get(type) || [];
-    
+
     handlers.forEach(handler => {
       try {
         handler(message);

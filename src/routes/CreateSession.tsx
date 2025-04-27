@@ -16,19 +16,32 @@ const CreateSession: React.FC = () => {
       setIsCreating(true);
       const sessionId = uuidv4();
 
+      console.log(`Creating new session ${sessionId} with URL: ${newUrl}`);
+
       // Create the session on the server
       await wsClient.createSession(sessionId, newUrl);
 
       // Register a one-time handler for session creation confirmation
-      wsClient.on('SESSION_CREATED', (message) => {
+      const handleSessionCreated = (message: any) => {
         if (message.sessionId === sessionId) {
+          console.log("Session created successfully:", message);
           setNewUrl("");
           navigate(`/watch/${sessionId}`);
         }
-      });
+      };
+
+      wsClient.on('SESSION_CREATED', handleSessionCreated);
+
+      // Set a timeout in case we don't get a response
+      setTimeout(() => {
+        console.log("No SESSION_CREATED response received, navigating anyway");
+        setNewUrl("");
+        navigate(`/watch/${sessionId}`);
+      }, 2000);
 
     } catch (error) {
       console.error("Failed to create session:", error);
+      alert("Failed to create session. Please try again.");
     } finally {
       setIsCreating(false);
     }

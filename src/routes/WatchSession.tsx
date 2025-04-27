@@ -24,28 +24,77 @@ const WatchSession: React.FC = () => {
     const connectToSession = async () => {
       try {
         setLoading(true);
+        console.log(`Joining session: ${sessionId}`);
 
         // Join the session
         await wsClient.joinSession(sessionId);
 
         // Listen for session snapshot (initial state)
-        wsClient.on('SESSION_SNAPSHOT', (message) => {
+        const handleSnapshot = (message: any) => {
           if (message.sessionId === sessionId) {
+            console.log("Received initial session snapshot:", message);
+
+            // Store the server timestamp when we received this message
+            const receivedTime = Date.now();
+
+            // Calculate network delay (roughly half the round-trip time)
+            // In a real app, you'd use a more sophisticated approach
+            const estimatedNetworkDelay = 50; // milliseconds
+
+            // Adjust the position based on whether the video is playing
+            const adjustedState = { ...message.state };
+
+            if (adjustedState.playing) {
+              // If video is playing, adjust the position based on the time elapsed since the state was created
+              // Formula: adjusted_pos = original_pos + (current_time - state_timestamp) / 1000
+              const timeElapsedMs = receivedTime - adjustedState.ts.p;
+              const adjustmentSeconds = timeElapsedMs / 1000;
+
+              console.log(`Adjusting position by ${adjustmentSeconds}s due to network delay`);
+              adjustedState.pos += adjustmentSeconds;
+            }
+
             setUrl(message.url);
-            setPlayheadState(message.state);
+            setPlayheadState(adjustedState);
             setLoading(false);
           }
-        });
+        };
 
         // Listen for state broadcasts (updates)
-        wsClient.on('STATE_BROADCAST', (message) => {
+        const handleBroadcast = (message: any) => {
           if (message.sessionId === sessionId) {
-            setPlayheadState(message.state);
+            console.log("Received state broadcast:", message);
+
+            // Store the server timestamp when we received this message
+            const receivedTime = Date.now();
+
+            // Adjust the position based on whether the video is playing
+            const adjustedState = { ...message.state };
+
+            if (adjustedState.playing) {
+              // If video is playing, adjust the position based on the time elapsed since the state was created
+              // Formula: adjusted_pos = original_pos + (current_time - state_timestamp) / 1000
+              const timeElapsedMs = receivedTime - adjustedState.ts.p;
+              const adjustmentSeconds = timeElapsedMs / 1000;
+
+              console.log(`Adjusting position by ${adjustmentSeconds}s due to network delay`);
+              adjustedState.pos += adjustmentSeconds;
+            }
+
+            // Update playhead state with adjusted position
+            setPlayheadState(adjustedState);
+
+            // Update URL if it changed
             if (message.state.url && message.state.url !== url) {
+              console.log(`Updating URL from ${url} to ${message.state.url}`);
               setUrl(message.state.url);
             }
           }
-        });
+        };
+
+        // Register handlers
+        wsClient.on('SESSION_SNAPSHOT', handleSnapshot);
+        wsClient.on('STATE_BROADCAST', handleBroadcast);
 
       } catch (error) {
         console.error("Failed to join session:", error);
@@ -60,15 +109,38 @@ const WatchSession: React.FC = () => {
     return () => {
       // We could disconnect here, but we'll keep the connection open
       // in case the user navigates back to this page
+      console.log("WatchSession component unmounting");
     };
   }, [sessionId, navigate, url]);
 
   // Function to update the playhead state
+  // This is only called for explicit play, pause, or seek events
   const updatePlayheadState = (pos: number, playing: boolean) => {
     if (sessionId && url) {
-      wsClient.updateState(sessionId, pos, playing, url);
+      console.log(`Sending state update to server: pos=${pos}, playing=${playing}`);
+
+      // Debounce updates to avoid sending too many
+      if (updatePlayheadState.timeoutId) {
+        clearTimeout(updatePlayheadState.timeoutId);
+      }
+
+      // Send the update after a short delay to avoid multiple rapid updates
+      updatePlayheadState.timeoutId = setTimeout(() => {
+        wsClient.updateState(sessionId, pos, playing, url)
+          .then(() => {
+            console.log("State update sent successfully");
+          })
+          .catch((error) => {
+            console.error("Failed to send state update:", error);
+          });
+      }, 100);
+    } else {
+      console.warn("Cannot update state: missing sessionId or url");
     }
   };
+
+  // Add a timeout property to the function for debouncing
+  updatePlayheadState.timeoutId = null as any;
 
   if (loading) {
     return (
